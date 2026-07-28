@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Runtime data — scraped DB is rebuilt by running the pipeline, never committed
+jobs.db
+*.db
+
+# Secrets
+.env
