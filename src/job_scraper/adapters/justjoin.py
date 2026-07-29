@@ -28,14 +28,20 @@ def _extract_locs(xml_bytes: bytes) -> list[str]:
 
 
 def discover_job_urls(
-    client: httpx.Client, limit: int | None = None
+    client: httpx.Client,
+    limit: int | None = None,
+    hard_ceiling: int = 8000,
 ) -> list[tuple[str, str]]:
     """Two-level walk: index sitemap → child sitemaps → job URLs.
 
     Scans the WHOLE sitemap, but keeps only URLs whose slug passes the
     relevance net (_classify_slug). Returns (url, tier) pairs.
 
-    limit caps the number of MATCHED urls (not scanned) — mainly for testing.
+    limit: cap matched urls — for testing only; production passes None.
+    hard_ceiling: runaway guard. If matches exceed this, the slug net is
+        almost certainly broken (matching everything), so stop and warn
+        loudly rather than silently fetch 10k+ pages. Not a normal cap —
+        legitimate growth should never approach it.
     """
     index_locs = _extract_locs(_get(client, SITEMAP_INDEX))
 
@@ -48,6 +54,15 @@ def discover_job_urls(
                 matched.append((url, tier))
                 if limit is not None and len(matched) >= limit:
                     return matched
+                if len(matched) >= hard_ceiling:
+                    print(
+                        f"  WARNING: matched {len(matched)} jobs, hit "
+                        f"hard_ceiling={hard_ceiling}. Slug net may be broken. "
+                        f"Stopping discovery."
+                    )
+                    return matched
+
+    return matched
 
     return matched
 

@@ -20,8 +20,8 @@ def run(limit: int | None, delay: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Job-scraper pipeline")
-    parser.add_argument("--limit", type=int, default=20,
-                        help="max jobs to scrape (default 20; ~10k live)")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="max matched jobs (default: no limit — full scan)")
     parser.add_argument("--delay", type=float, default=0.5,
                         help="seconds between page fetches (default 0.5)")
     args = parser.parse_args()
