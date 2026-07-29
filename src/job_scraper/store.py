@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     valid_through   TEXT,
     url             TEXT,
     raw_json        TEXT,
+    match_tier      TEXT,               -- 'core' | 'adjacent' — why fetched
     first_seen      TEXT DEFAULT CURRENT_TIMESTAMP,  -- set once by the DEFAULT
     last_seen       TEXT
 );
@@ -42,11 +43,11 @@ UPSERT = """
 INSERT INTO jobs (
     id, source, title, company, description, locations,
     employment_type, skills, salary_min, salary_max, currency,
-    posted_date, valid_through, url, raw_json, last_seen
+    posted_date, valid_through, url, raw_json, match_tier, last_seen
 ) VALUES (
     :id, :source, :title, :company, :description, :locations,
     :employment_type, :skills, :salary_min, :salary_max, :currency,
-    :posted_date, :valid_through, :url, :raw_json, CURRENT_TIMESTAMP
+    :posted_date, :valid_through, :url, :raw_json, :match_tier, CURRENT_TIMESTAMP
 )
 ON CONFLICT(id) DO UPDATE SET
     title           = excluded.title,
@@ -61,6 +62,7 @@ ON CONFLICT(id) DO UPDATE SET
     valid_through   = excluded.valid_through,
     url             = excluded.url,
     raw_json        = excluded.raw_json,
+    match_tier      = excluded.match_tier,
     last_seen       = CURRENT_TIMESTAMP;
 """
 

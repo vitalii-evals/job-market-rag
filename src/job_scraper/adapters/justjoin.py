@@ -1,4 +1,6 @@
 
+import html
+
 import httpx
 from lxml import etree
 
@@ -25,21 +27,29 @@ def _extract_locs(xml_bytes: bytes) -> list[str]:
     return [loc.text for loc in root.findall(".//sm:loc", NS)]
 
 
-def discover_job_urls(client: httpx.Client, limit: int | None = None) -> list[str]:
-    """Two-level walk: index sitemap → child sitemaps → job-page URLs.
+def discover_job_urls(
+    client: httpx.Client, limit: int | None = None
+) -> list[tuple[str, str]]:
+    """Two-level walk: index sitemap → child sitemaps → job URLs.
 
-    limit caps the number of job URLs returned (Phase-1 politeness; 10k+ live).
+    Scans the WHOLE sitemap, but keeps only URLs whose slug passes the
+    relevance net (_classify_slug). Returns (url, tier) pairs.
+
+    limit caps the number of MATCHED urls (not scanned) — mainly for testing.
     """
-    index_locs = _extract_locs(_get(client, SITEMAP_INDEX))  # -> [part0.xml, ...]
+    index_locs = _extract_locs(_get(client, SITEMAP_INDEX))
 
-    job_urls: list[str] = []
+    matched: list[tuple[str, str]] = []
     for child_sitemap in index_locs:
-        job_urls.extend(_extract_locs(_get(client, child_sitemap)))
-        if limit is not None and len(job_urls) >= limit:
-            break
+        for url in _extract_locs(_get(client, child_sitemap)):
+            slug = _native_id(url)
+            tier = _classify_slug(slug)
+            if tier is not None:
+                matched.append((url, tier))
+                if limit is not None and len(matched) >= limit:
+                    return matched
 
-    return job_urls[:limit] if limit is not None else job_urls
-
+    return matched
 
 import json
 from urllib.parse import urlparse
@@ -80,7 +90,12 @@ def _parse_locations(job_location) -> str | None:
     return ", ".join(cities) if cities else None
 
 
-def fetch_job(client: httpx.Client, url: str) -> dict | None:
+def _unescape(s: str | None) -> str | None:
+    """Decode HTML entities (&amp; -> &) from JSON-LD text fields."""
+    return html.unescape(s) if s else None
+
+
+def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict | None:
     """Fetch one job page, extract JobPosting JSON-LD, map to common schema.
     Returns None if the page has no parseable JobPosting (skip, don't crash)."""
     html = _get(client, url)
@@ -106,9 +121,9 @@ def fetch_job(client: httpx.Client, url: str) -> dict | None:
     return {
         "id": f"justjoin:{_native_id(url)}",
         "source": "justjoin",
-        "title": posting.get("title"),
+        "title": _unescape(posting.get("title")),
         "company": org.get("name") if isinstance(org, dict) else None,
-        "description": posting.get("description"),
+        "description": _unescape(posting.get("description")),
         "locations": _parse_locations(posting.get("jobLocation")),
         "employment_type": posting.get("employmentType"),
         "skills": None,  # not present in JSON-LD; sourced later if needed
@@ -119,6 +134,7 @@ def fetch_job(client: httpx.Client, url: str) -> dict | None:
         "valid_through": posting.get("validThrough"),
         "url": url,
         "raw_json": json.dumps(posting, ensure_ascii=False),
+        "match_tier": tier,
     }
 
 
@@ -128,25 +144,65 @@ import time
 def scrape(limit: int | None = None, delay: float = 0.5) -> list[dict]:
     """Full JustJoin scrape: discover live job URLs, fetch+map each.
 
-    limit: cap number of jobs (Phase-1 politeness; 10k+ live).
+    limit: cap number of matched jobs (Phase-1 politeness; 10k+ live).
     delay: seconds between page fetches (rate-limit courtesy).
     Returns common-schema dicts ready for store.upsert_jobs().
     """
     with httpx.Client() as client:
-        urls = discover_job_urls(client, limit=limit)
+        pairs = discover_job_urls(client, limit=limit)
 
         jobs: list[dict] = []
-        for i, url in enumerate(urls, 1):
+        for i, (url, tier) in enumerate(pairs, 1):
             try:
-                job = fetch_job(client, url)
+                job = fetch_job(client, url, tier)
             except httpx.HTTPError as e:
-                print(f"  [{i}/{len(urls)}] FETCH ERROR {url}: {e}")
+                print(f"  [{i}/{len(pairs)}] FETCH ERROR {url}: {e}")
                 continue
             if job is None:
-                print(f"  [{i}/{len(urls)}] no JobPosting, skipped: {url}")
+                print(f"  [{i}/{len(pairs)}] no JobPosting, skipped: {url}")
                 continue
             jobs.append(job)
-            print(f"  [{i}/{len(urls)}] ok: {job['title']} @ {job['company']}")
+            print(f"  [{i}/{len(pairs)}] ok: {job['title']} @ {job['company']}")
             time.sleep(delay)
 
     return jobs
+
+
+# --- Slug-based relevance prefilter -----------------------------------------
+EXCLUDE_KEYWORDS = (
+    "korepetytor", "nauczyciel", "manager-zajec", "zajec-probnych",
+    "sales", "account-manager", "marketing", "helpdesk", "service-desk",
+    "recruiter", "hr-", "specialist-salae",
+)
+CORE_KEYWORDS = (
+    "ai", "ml", "machine-learning", "llm", "genai", "gen-ai",
+    "rag", "nlp", "data-scien", "mlops", "automation", "rpa",
+)
+ADJACENT_KEYWORDS = (
+    "python", "data-engineer", "data-eng", "backend", "back-end",
+)
+
+
+def _classify_slug(slug: str) -> str | None:
+    """Return 'core' | 'adjacent' if the slug passes the net, else None.
+    Excludes are checked first and always win."""
+    s = slug.lower()
+    if any(kw in s for kw in EXCLUDE_KEYWORDS):
+        return None
+    tokens = s.split("-")
+
+    def _has(keywords: tuple[str, ...]) -> bool:
+        for kw in keywords:
+            if "-" in kw or len(kw) > 3:
+                if kw in s:
+                    return True
+            else:
+                if kw in tokens:
+                    return True
+        return False
+
+    if _has(CORE_KEYWORDS):
+        return "core"
+    if _has(ADJACENT_KEYWORDS):
+        return "adjacent"
+    return None

@@ -15,7 +15,7 @@ LOG="$LOG_DIR/scrape-$(date '+%Y-%m').log"
 
 {
   echo "===== run start: $STAMP ====="
-  "$UV" run job-scraper --limit 300 --delay 0.5
+  "$UV" run job-scraper --limit 3000 --delay 0.5
   echo "===== run end:   $(date '+%Y-%m-%d %H:%M:%S') ====="
   echo
 } >> "$LOG" 2>&1
