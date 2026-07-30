@@ -8,6 +8,10 @@ LOG_DIR="$PROJECT_DIR/logs"
 
 mkdir -p "$LOG_DIR"
 cd "$PROJECT_DIR"
+# Load API keys into cron's empty environment (cron does NOT source ~/.bashrc)
+set -a
+source "$PROJECT_DIR/.env"
+set +a
 
 # Timestamped run; append to a dated log, and to a rolling latest.log
 STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
