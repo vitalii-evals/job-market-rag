@@ -24,8 +24,9 @@ def _format_salary(job) -> str:
         return "not stated"
     lo = lo if lo is not None else "?"
     hi = hi if hi is not None else "?"
-    return f"{lo}-{hi} {cur}".strip()
-
+    period = job.get("salary_period")
+    per = f"/{period.lower()}" if period else ""
+    return f"{lo}-{hi} {cur}{per}".strip()
 
 def build_context(jobs) -> str:
     """Render retrieved jobs into a compact grounded context block.

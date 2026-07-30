@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     salary_min      INTEGER,
     salary_max      INTEGER,
     currency        TEXT,
+    salary_period   TEXT,               -- HOUR/DAY/WEEK/MONTH/YEAR — units for salary_min/max
     posted_date     TEXT,
     valid_through   TEXT,
     url             TEXT,
@@ -42,11 +43,11 @@ def get_connection() -> sqlite3.Connection:
 UPSERT = """
 INSERT INTO jobs (
     id, source, title, company, description, locations,
-    employment_type, skills, salary_min, salary_max, currency,
+    employment_type, skills, salary_min, salary_max, currency, salary_period,
     posted_date, valid_through, url, raw_json, match_tier, last_seen
 ) VALUES (
     :id, :source, :title, :company, :description, :locations,
-    :employment_type, :skills, :salary_min, :salary_max, :currency,
+    :employment_type, :skills, :salary_min, :salary_max, :currency, :salary_period,
     :posted_date, :valid_through, :url, :raw_json, :match_tier, CURRENT_TIMESTAMP
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -59,6 +60,7 @@ ON CONFLICT(id) DO UPDATE SET
     salary_min      = excluded.salary_min,
     salary_max      = excluded.salary_max,
     currency        = excluded.currency,
+    salary_period   = excluded.salary_period,
     valid_through   = excluded.valid_through,
     url             = excluded.url,
     raw_json        = excluded.raw_json,

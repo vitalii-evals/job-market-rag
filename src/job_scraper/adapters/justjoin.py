@@ -84,13 +84,16 @@ def _first(value):
     return value[0] if isinstance(value, list) else value
 
 
-def _parse_salary(base: dict | None) -> tuple[int | None, int | None, str | None]:
-    """Extract (min, max, currency) from baseSalary, tolerating absence."""
+def _parse_salary(base: dict | None) -> tuple[int | None, int | None, str | None, str | None]:
+    """Extract (min, max, currency, period) from baseSalary, tolerating absence.
+    period = schema.org unitText (HOUR/DAY/WEEK/MONTH/YEAR) or None."""
     if not base:
-        return None, None, None
+        return None, None, None, None
     val = base.get("value") or {}
-    return val.get("minValue"), val.get("maxValue"), base.get("currency")
-
+    period = val.get("unitText")
+    if period not in {"HOUR", "DAY", "WEEK", "MONTH", "YEAR"}:
+        period = None  # reject unexpected/garbage values, mirror backfill logic
+    return val.get("minValue"), val.get("maxValue"), base.get("currency"), period
 
 def _parse_locations(job_location) -> str | None:
     """jobLocation may be one Place or a list. Return comma-joined cities."""
@@ -130,7 +133,7 @@ def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict |
     if posting is None:
         return None  # not a job page, or schema changed — caller skips it
 
-    salary_min, salary_max, currency = _parse_salary(posting.get("baseSalary"))
+    salary_min, salary_max, currency, salary_period = _parse_salary(posting.get("baseSalary"))
     org = _first(posting.get("hiringOrganization")) or {}
 
     return {
@@ -145,6 +148,7 @@ def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict |
         "salary_min": salary_min,
         "salary_max": salary_max,
         "currency": currency,
+        "salary_period": salary_period,
         "posted_date": posting.get("datePosted"),
         "valid_through": posting.get("validThrough"),
         "url": url,

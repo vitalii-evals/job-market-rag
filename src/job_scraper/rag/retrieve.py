@@ -8,7 +8,7 @@ from job_scraper.rag.embed import blob_to_vec, MODEL, DIM
 # columns the answer layer will want alongside each retrieved vector
 _META_COLS = [
     "id", "title", "company", "locations", "url", "match_tier",
-    "salary_min", "salary_max", "currency", "employment_type", "description",
+    "salary_min", "salary_max", "currency", "salary_period", "employment_type", "description",
 ]
 
 def load_vector_store(db_path: str = "jobs.db"):
