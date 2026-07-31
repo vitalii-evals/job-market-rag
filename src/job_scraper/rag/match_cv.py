@@ -7,6 +7,7 @@ import numpy as np
 
 from job_scraper.rag.retrieve import load_vector_store, embed_query
 from job_scraper.rag.answer import _format_salary
+from datetime import datetime, timedelta, timezone
 
 KRAKOW_SPELLINGS = ("kraków", "krakow", "cracow")
 
@@ -21,6 +22,21 @@ def _passes_location(job, krakow: bool = True, remote: bool = True) -> bool:
         if any(city in locs for city in KRAKOW_SPELLINGS):
             return True
     return False
+
+def _within_days(job, days: int | None) -> bool:
+    """Keep if posted_date is within the last `days`. None = no date filter.
+    posted_date is ISO with trailing Z (JustJoin refresh timestamp)."""
+    if days is None:
+        return True
+    pd = job.get("posted_date")
+    if not pd:
+        return False
+    try:
+        dt = datetime.fromisoformat(pd.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return dt >= cutoff
 
 # Target line (shape B) — steers matching toward goal roles, not just past work.
 # Lives here, NOT in the CV file, so tuning aim doesn't touch the real document.
@@ -42,7 +58,7 @@ def build_cv_query(cv_path: str = "cv.docx") -> str:
     return read_cv(cv_path) + "\n\n" + TARGET_STATEMENT
 
 
-def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, db_path: str = "jobs.db"):
+def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None, db_path: str = "jobs.db"):
     """Rank every embedded job by cosine similarity to the CV query, then
     collapse near-identical postings (same title+company across cities) into
     one entry. Returns top_n DISTINCT jobs, best first."""
@@ -59,6 +75,10 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, db_path: str = "jobs.db
     for i in order:
         job = metadata[i]
         if not _passes_location(job):                # Kraków or remote only
+            continue
+        if not _passes_location(job):                # Kraków or remote only
+            continue
+        if not _within_days(job, days):              # posted within N days
             continue
         key = (job["title"], job["company"])
         if key in seen:
@@ -86,9 +106,9 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, db_path: str = "jobs.db
 
 if __name__ == "__main__":
     top_n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
-    results = rank_jobs(top_n=top_n)
-
-    print(f"Top {len(results)} distinct jobs matched to your CV:\n")
+    days = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+    results = rank_jobs(top_n=top_n, days=days)
+    print(f"(filtered to jobs posted within {days} days)\n")
     for rank, job in enumerate(results, 1):
         sal = _format_salary(job)
         loc = job["locations"] or "location n/a"
