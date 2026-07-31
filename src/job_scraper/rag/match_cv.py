@@ -8,6 +8,20 @@ import numpy as np
 from job_scraper.rag.retrieve import load_vector_store, embed_query
 from job_scraper.rag.answer import _format_salary
 
+KRAKOW_SPELLINGS = ("kraków", "krakow", "cracow")
+
+
+def _passes_location(job, krakow: bool = True, remote: bool = True) -> bool:
+    """Keep a job if it's remote OR in Kraków (any spelling).
+    krakow/remote flags let callers widen or narrow the gate."""
+    if remote and job.get("location_type") == "remote":
+        return True
+    if krakow:
+        locs = (job.get("locations") or "").lower()
+        if any(city in locs for city in KRAKOW_SPELLINGS):
+            return True
+    return False
+
 # Target line (shape B) — steers matching toward goal roles, not just past work.
 # Lives here, NOT in the CV file, so tuning aim doesn't touch the real document.
 TARGET_STATEMENT = (
@@ -39,12 +53,13 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, db_path: str = "jobs.db
     scores = matrix @ q                              # cosine (vectors are unit-norm)
     order = np.argsort(scores)[::-1]                 # ALL jobs, descending
 
-    # Walk highest-first, keep first sighting of each (title, company),
-    # fold later cities into the kept entry's location list.
+    # Walk highest-first: apply location gate, then dedupe (title, company).
     seen = {}          # (title, company) -> result dict
     distinct = []      # kept entries, in rank order
     for i in order:
         job = metadata[i]
+        if not _passes_location(job):                # Kraków or remote only
+            continue
         key = (job["title"], job["company"])
         if key in seen:
             # same role, different city — merge this location in

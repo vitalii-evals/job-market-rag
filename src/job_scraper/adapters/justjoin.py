@@ -107,6 +107,14 @@ def _parse_locations(job_location) -> str | None:
     cities = [c for c in cities if c]  # drop None/empty
     return ", ".join(cities) if cities else None
 
+def _parse_location_type(posting: dict) -> str | None:
+    """Map schema.org jobLocationType to 'remote' | 'onsite' | None.
+    TELECOMMUTE -> remote; physical location present -> onsite; else None."""
+    if posting.get("jobLocationType") == "TELECOMMUTE":
+        return "remote"
+    if posting.get("jobLocation"):
+        return "onsite"
+    return None
 
 def _unescape(s: str | None) -> str | None:
     """Decode HTML entities (&amp; -> &) from JSON-LD text fields."""
@@ -143,6 +151,7 @@ def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict |
         "company": org.get("name") if isinstance(org, dict) else None,
         "description": _unescape(posting.get("description")),
         "locations": _parse_locations(posting.get("jobLocation")),
+        "location_type": _parse_location_type(posting),
         "employment_type": posting.get("employmentType"),
         "skills": None,  # not present in JSON-LD; sourced later if needed
         "salary_min": salary_min,
