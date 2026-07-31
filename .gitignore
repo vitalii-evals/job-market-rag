@@ -16,3 +16,4 @@ jobs.db
 # Secrets
 .env
 logs/
+cv.docx
