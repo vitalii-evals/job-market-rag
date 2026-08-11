@@ -48,6 +48,45 @@ def _detect_seniority(job) -> str:
         return "junior"
     return "mid"  # regular/mid/unspecified — the default, most common bucket
 
+SKILL_VOCAB = {
+    "Python": ["python"],
+    "SQL": ["sql", "postgresql", "postgres"],
+    "RAG": ["rag", "retrieval-augmented", "retrieval augmented"],
+    "LLM": ["llm", "large language model"],
+    "Anthropic/Claude": ["anthropic", "claude"],
+    "Embeddings/Vector search": ["embedding", "vector search", "vector database", "semantic search"],
+    "Agentic/Automation": ["agent", "agentic", "workflow automation", "n8n"],
+    "Prompt engineering": ["prompt engineering", "system prompt"],
+    "Web scraping/APIs": ["web scraping", "rest api", "api integration"],
+    "Linux/Infra": ["linux", "vps", "ssh", "docker"],
+    "Git": ["git"],
+}
+
+
+def _skill_overlap(job) -> tuple[int, int, list[str]]:
+    """Count how many of your skill categories appear in the job's text.
+    Deterministic substring match — transparent, debuggable, no API calls.
+    Returns (matched_count, total_categories, matched_category_names)."""
+    text = f"{job.get('title', '')} {job.get('description', '')}".lower()
+    matched = [
+        skill for skill, terms in SKILL_VOCAB.items()
+        if any(term in text for term in terms)
+    ]
+    return len(matched), len(SKILL_VOCAB), matched
+
+OTHER_LANGUAGE_MARKERS = ("java ", "java)", "golang", " go ", "angular", "c#", ".net",
+                           "php", "ruby", "kotlin", "swift", "rust", "scala")
+
+
+def _stack_mismatch(job) -> bool:
+    """Flag if the title centers on a non-Python language. Title-only (the
+    headline signal, not a passing mention buried in the description) — and
+    only if Python isn't also named, since dual-stack roles aren't a mismatch."""
+    title = (job.get("title") or "").lower()
+    if "python" in title:
+        return False
+    return any(marker in title for marker in OTHER_LANGUAGE_MARKERS)
+
 # Target line (shape B) — steers matching toward goal roles, not just past work.
 # Lives here, NOT in the CV file, so tuning aim doesn't touch the real document.
 TARGET_STATEMENT = (
@@ -96,10 +135,13 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None
             if loc and loc not in entry["_locs"]:
                 entry["_locs"].append(loc)
             continue
+        n_match, n_total, matched_skills = _skill_overlap(job)
         entry = {
             **job,
             "score": float(scores[i]),
             "seniority": _detect_seniority(job),
+            "skill_matches": (n_match, n_total, matched_skills),
+            "stack_mismatch": _stack_mismatch(job),
             "_locs": [(job["locations"] or "").strip()],
         }
         seen[key] = entry
@@ -131,6 +173,10 @@ if __name__ == "__main__":
             ", ".join(loc.split(", ")[:3]) + f", +{city_count - 3} more"
         )
         sen_tag = {"senior": "[SENIOR]", "junior": "[JUNIOR]", "mid": ""}[job["seniority"]]
-        print(f"{rank:2}. [{job['score']:.4f}] {sen_tag} {job['title']} @ {job['company']}")
+        n_match, n_total, matched_skills = job["skill_matches"]
+        skills_str = ", ".join(matched_skills) if matched_skills else "none"
+        mismatch_tag = " ⚠ NON-PYTHON STACK" if job["stack_mismatch"] else ""
+        print(f"{rank:2}. [{job['score']:.4f}] {sen_tag} {job['title']} @ {job['company']}{mismatch_tag}")
         print(f"    {job['match_tier']} | {loc_display} | {sal}")
+        print(f"    skills: {n_match}/{n_total} ({skills_str})")
         print(f"    {job['url']}\n")
