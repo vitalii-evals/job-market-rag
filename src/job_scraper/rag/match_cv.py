@@ -68,7 +68,10 @@ SKILL_VOCAB = {
     "Git": (1, ["git"]),
 }
 MAX_SKILL_SCORE = sum(w for w, _ in SKILL_VOCAB.values())  # 18
-
+# Blend weights: cosine (broad semantic direction) + skill-overlap (your
+# proven-strength categories). Tunable — adjust and re-run to see effect.
+COSINE_WEIGHT = 0.6
+SKILL_WEIGHT = 0.4
 
 def _skill_overlap(job) -> tuple[int, int, list[str]]:
     """Weighted skill-category match. A proven-strength category (n8n/
@@ -117,46 +120,57 @@ def build_cv_query(cv_path: str = "cv.docx") -> str:
 
 
 def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None, db_path: str = "jobs.db"):
-    """Rank every embedded job by cosine similarity to the CV query, then
-    collapse near-identical postings (same title+company across cities) into
-    one entry. Returns top_n DISTINCT jobs, best first."""
+    """Rank embedded jobs by a BLEND of cosine similarity and weighted skill
+    overlap (not cosine alone) — a job matching your proven-strength skills
+    (n8n/automation) can outrank a higher-cosine job that's just Python/RAG-
+    vocabulary-dense. Then collapse near-identical postings (same title+company
+    across cities). Returns top_n DISTINCT jobs, best first."""
     matrix, metadata = load_vector_store(db_path)   # (N, 1024) + aligned meta
     query = build_cv_query(cv_path)
     q = embed_query(query)                            # CV as a query vector
-
     scores = matrix @ q                              # cosine (vectors are unit-norm)
-    order = np.argsort(scores)[::-1]                 # ALL jobs, descending
 
-    # Walk highest-first: apply location gate, then dedupe (title, company).
-    seen = {}          # (title, company) -> result dict
-    distinct = []      # kept entries, in rank order
-    for i in order:
+    # Pass 1: apply hard gates, compute combined score for every survivor.
+    candidates = []
+    for i in range(len(metadata)):
         job = metadata[i]
         if not _passes_location(job):                # Kraków or remote only
             continue
         if not _within_days(job, days):              # posted within N days
             continue
-        if _detect_seniority(job) == "senior":        # exclude explicit-senior;
-            continue                                  # unmarked passes (57% of corpus)
-        if _stack_mismatch(job):                      # exclude non-Python-core roles
-            continue                                  # (Java/Go/Angular titles)
-        key = (job["title"], job["company"])
-        if key in seen:
-            # same role, different city — merge this location in
-            entry = seen[key]
-            loc = (job["locations"] or "").strip()
-            if loc and loc not in entry["_locs"]:
-                entry["_locs"].append(loc)
+        seniority = _detect_seniority(job)
+        if seniority == "senior":                     # exclude explicit-senior
             continue
+        if _stack_mismatch(job):                      # exclude non-Python-core roles
+            continue
+
+        cosine = float(scores[i])
         n_match, n_total, matched_skills = _skill_overlap(job)
-        entry = {
+        skill_fraction = n_match / n_total if n_total else 0.0
+        combined = COSINE_WEIGHT * cosine + SKILL_WEIGHT * skill_fraction
+
+        candidates.append({
             **job,
-            "score": float(scores[i]),
-            "seniority": _detect_seniority(job),
+            "score": cosine,
+            "combined_score": combined,
+            "seniority": seniority,
             "skill_matches": (n_match, n_total, matched_skills),
-            "stack_mismatch": _stack_mismatch(job),
             "_locs": [(job["locations"] or "").strip()],
-        }
+        })
+
+    # Pass 2: sort by the blend (NOT raw cosine), then dedupe (title, company).
+    candidates.sort(key=lambda e: e["combined_score"], reverse=True)
+
+    seen = {}
+    distinct = []
+    for entry in candidates:
+        key = (entry["title"], entry["company"])
+        if key in seen:
+            existing = seen[key]
+            loc = entry["_locs"][0]
+            if loc and loc not in existing["_locs"]:
+                existing["_locs"].append(loc)
+            continue
         seen[key] = entry
         distinct.append(entry)
         if len(distinct) >= top_n:
@@ -169,7 +183,6 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None
         del e["_locs"]
 
     return distinct
-
 
 
 if __name__ == "__main__":
@@ -188,8 +201,7 @@ if __name__ == "__main__":
         sen_tag = {"senior": "[SENIOR]", "junior": "[JUNIOR]", "mid": ""}[job["seniority"]]
         n_match, n_total, matched_skills = job["skill_matches"]
         skills_str = ", ".join(matched_skills) if matched_skills else "none"
-        mismatch_tag = " ⚠ NON-PYTHON STACK" if job["stack_mismatch"] else ""
-        print(f"{rank:2}. [{job['score']:.4f}] {sen_tag} {job['title']} @ {job['company']}{mismatch_tag}")
+        print(f"{rank:2}. [blend {job['combined_score']:.4f} | cos {job['score']:.4f}] {sen_tag} {job['title']} @ {job['company']}")
         print(f"    {job['match_tier']} | {loc_display} | {sal}")
         print(f"    skills: {n_match}/{n_total} ({skills_str})")
         print(f"    {job['url']}\n")
