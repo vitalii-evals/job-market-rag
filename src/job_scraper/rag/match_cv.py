@@ -48,31 +48,40 @@ def _detect_seniority(job) -> str:
         return "junior"
     return "mid"  # regular/mid/unspecified — the default, most common bucket
 
+# Weight reflects how proven/strong the skill actually is, not a guess:
+# 3 = interview-validated (Comarch interview: n8n+LLM automation, positive
+# feedback through 2 rounds) — this IS the strongest real signal you have.
+# 2 = proven via NovaDent, or actively defended via job-market-rag.
+# 1 = supporting/peripheral — real, but not the differentiator.
 SKILL_VOCAB = {
-    "Python": ["python"],
-    "SQL": ["sql", "postgresql", "postgres"],
-    "RAG": ["rag", "retrieval-augmented", "retrieval augmented"],
-    "LLM": ["llm", "large language model"],
-    "Anthropic/Claude": ["anthropic", "claude"],
-    "Embeddings/Vector search": ["embedding", "vector search", "vector database", "semantic search"],
-    "Agentic/Automation": ["agent", "agentic", "workflow automation", "n8n"],
-    "Prompt engineering": ["prompt engineering", "system prompt"],
-    "Web scraping/APIs": ["web scraping", "rest api", "api integration"],
-    "Linux/Infra": ["linux", "vps", "ssh", "docker"],
-    "Git": ["git"],
+    "Agentic/Automation": (3, ["n8n", "ai agent", "agentic", "workflow automation",
+                                "automatyzacj", "no-code", "low-code", "no code", "low code"]),
+    "LLM": (2, ["llm", "large language model"]),
+    "Anthropic/Claude": (2, ["anthropic", "claude"]),
+    "Prompt engineering": (2, ["prompt engineering", "system prompt"]),
+    "RAG": (2, ["rag", "retrieval-augmented", "retrieval augmented"]),
+    "Embeddings/Vector search": (2, ["embedding", "vector search", "vector database", "semantic search"]),
+    "Python": (1, ["python"]),
+    "SQL": (1, ["sql", "postgresql", "postgres"]),
+    "Web scraping/APIs": (1, ["web scraping", "rest api", "api integration", "webhook"]),
+    "Linux/Infra": (1, ["linux", "vps", "ssh", "docker"]),
+    "Git": (1, ["git"]),
 }
+MAX_SKILL_SCORE = sum(w for w, _ in SKILL_VOCAB.values())  # 18
 
 
 def _skill_overlap(job) -> tuple[int, int, list[str]]:
-    """Count how many of your skill categories appear in the job's text.
-    Deterministic substring match — transparent, debuggable, no API calls.
-    Returns (matched_count, total_categories, matched_category_names)."""
+    """Weighted skill-category match. A proven-strength category (n8n/
+    automation) counts more than a peripheral one (Git), so a job matching
+    your strongest, interview-tested lane outranks one matching only minor
+    overlaps. Deterministic substring match — transparent, no API calls."""
     text = f"{job.get('title', '')} {job.get('description', '')}".lower()
     matched = [
-        skill for skill, terms in SKILL_VOCAB.items()
+        skill for skill, (weight, terms) in SKILL_VOCAB.items()
         if any(term in text for term in terms)
     ]
-    return len(matched), len(SKILL_VOCAB), matched
+    score = sum(SKILL_VOCAB[s][0] for s in matched)
+    return score, MAX_SKILL_SCORE, matched
 
 OTHER_LANGUAGE_MARKERS = ("java ", "java)", "golang", " go ", "angular", "c#", ".net",
                            "php", "ruby", "kotlin", "swift", "rust", "scala")
