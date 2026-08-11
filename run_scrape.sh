@@ -18,8 +18,10 @@ STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 LOG="$LOG_DIR/scrape-$(date '+%Y-%m').log"
 
 {
-  echo "===== run start: $STAMP ====="
+echo "===== run start: $STAMP ====="
   "$UV" run job-scraper --delay 0.5
+  echo "----- sending digest -----"
+  "$UV" run python -m job_scraper.rag.digest || echo "digest send FAILED (non-fatal, scrape still succeeded)"
   echo "===== run end:   $(date '+%Y-%m-%d %H:%M:%S') ====="
   echo
 } >> "$LOG" 2>&1
