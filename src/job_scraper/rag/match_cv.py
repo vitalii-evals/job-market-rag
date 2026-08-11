@@ -38,6 +38,16 @@ def _within_days(job, days: int | None) -> bool:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     return dt >= cutoff
 
+def _detect_seniority(job) -> str:
+    """Classify seniority from the title. Deterministic keyword match —
+    postings state it almost explicitly, no reasoning required."""
+    title = (job.get("title") or "").lower()
+    if any(m in title for m in ("senior", "sr.", "lead", "principal", "staff", "head of")):
+        return "senior"
+    if any(m in title for m in ("junior", "jr.", "graduate", "intern", "entry")):
+        return "junior"
+    return "mid"  # regular/mid/unspecified — the default, most common bucket
+
 # Target line (shape B) — steers matching toward goal roles, not just past work.
 # Lives here, NOT in the CV file, so tuning aim doesn't touch the real document.
 TARGET_STATEMENT = (
@@ -76,8 +86,6 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None
         job = metadata[i]
         if not _passes_location(job):                # Kraków or remote only
             continue
-        if not _passes_location(job):                # Kraków or remote only
-            continue
         if not _within_days(job, days):              # posted within N days
             continue
         key = (job["title"], job["company"])
@@ -88,7 +96,12 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None
             if loc and loc not in entry["_locs"]:
                 entry["_locs"].append(loc)
             continue
-        entry = {**job, "score": float(scores[i]), "_locs": [(job["locations"] or "").strip()]}
+        entry = {
+            **job,
+            "score": float(scores[i]),
+            "seniority": _detect_seniority(job),
+            "_locs": [(job["locations"] or "").strip()],
+        }
         seen[key] = entry
         distinct.append(entry)
         if len(distinct) >= top_n:
@@ -117,6 +130,7 @@ if __name__ == "__main__":
         loc_display = loc if city_count <= 3 else (
             ", ".join(loc.split(", ")[:3]) + f", +{city_count - 3} more"
         )
-        print(f"{rank:2}. [{job['score']:.4f}] {job['title']} @ {job['company']}")
+        sen_tag = {"senior": "[SENIOR]", "junior": "[JUNIOR]", "mid": ""}[job["seniority"]]
+        print(f"{rank:2}. [{job['score']:.4f}] {sen_tag} {job['title']} @ {job['company']}")
         print(f"    {job['match_tier']} | {loc_display} | {sal}")
         print(f"    {job['url']}\n")
