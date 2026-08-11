@@ -127,6 +127,10 @@ def rank_jobs(cv_path: str = "cv.docx", top_n: int = 20, days: int | None = None
             continue
         if not _within_days(job, days):              # posted within N days
             continue
+        if _detect_seniority(job) == "senior":        # exclude explicit-senior;
+            continue                                  # unmarked passes (57% of corpus)
+        if _stack_mismatch(job):                      # exclude non-Python-core roles
+            continue                                  # (Java/Go/Angular titles)
         key = (job["title"], job["company"])
         if key in seen:
             # same role, different city — merge this location in
