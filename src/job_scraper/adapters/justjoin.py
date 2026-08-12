@@ -5,6 +5,8 @@ import re
 import httpx
 from lxml import etree
 
+from job_scraper.stats.taxonomy import extract_skills
+
 SITEMAP_INDEX = "https://justjoin.it/sitemaps/active-jobs.xml"
 
 # Honest, descriptive UA — declares what we are, per compliance principle.
@@ -167,18 +169,25 @@ def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict |
     salary_min, salary_max, currency, salary_period = _parse_salary(posting.get("baseSalary"))
     org = _first(posting.get("hiringOrganization")) or {}
     experience_level = _parse_experience_level(page_bytes)
+    title = _unescape(posting.get("title"))
+    description = _unescape(posting.get("description"))
+    # Market-taxonomy extraction (stats/taxonomy.py) — independent of
+    # match_cv.py's personal SKILL_VOCAB. Same join format as
+    # backfill_skills.py (", ".join(sorted(...))) so historical and
+    # newly-scraped rows are consistent, splittable the same way.
+    skills = extract_skills(f"{title or ''} {description or ''}")
 
     return {
         "id": f"justjoin:{_native_id(url)}",
         "source": "justjoin",
-        "title": _unescape(posting.get("title")),
+        "title": title,
         "company": org.get("name") if isinstance(org, dict) else None,
-        "description": _unescape(posting.get("description")),
+        "description": description,
         "locations": _parse_locations(posting.get("jobLocation")),
         "location_type": _parse_location_type(posting),
         "experience_level": experience_level,
         "employment_type": posting.get("employmentType"),
-        "skills": None,  # not present in JSON-LD; sourced later if needed
+        "skills": ", ".join(sorted(skills)) if skills else None,
         "salary_min": salary_min,
         "salary_max": salary_max,
         "currency": currency,
