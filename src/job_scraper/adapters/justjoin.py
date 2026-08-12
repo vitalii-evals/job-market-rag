@@ -1,5 +1,6 @@
 
 import html
+import re
 
 import httpx
 from lxml import etree
@@ -116,6 +117,26 @@ def _parse_location_type(posting: dict) -> str | None:
         return "onsite"
     return None
 
+# Not part of schema.org JobPosting — JustJoin doesn't expose seniority via JSON-LD.
+# Lives in the page's Next.js RSC stream (__next_f.push chunks) as a double-escaped
+# JSON fragment: \"experienceLevel\":{\"label\":...,\"value\":...}. Appears once per
+# page for the primary job; the related-jobs sidebar uses a flat string form
+# (\"experienceLevel\":\"senior\") not matched by this pattern — verified across 5
+# test pages, single match each, correct values in every case.
+EXPERIENCE_LEVEL_RE = re.compile(
+    rb'\\"experienceLevel\\":\{\\"label\\":\\"[a-zA-Z_]*\\",\\"value\\":\\"([a-zA-Z_]*)\\"\}'
+)
+
+
+def _parse_experience_level(page_bytes: bytes) -> str | None:
+    """Extract experienceLevel from raw page bytes. Undocumented internal payload
+    shape, not a stable contract like JSON-LD — more fragile than other extractors
+    here. Returns None silently on shape drift rather than crashing; watch for a
+    drop in non-null coverage after a scrape as the signal something broke."""
+    match = EXPERIENCE_LEVEL_RE.search(page_bytes)
+    return match.group(1).decode() if match else None
+
+
 def _unescape(s: str | None) -> str | None:
     """Decode HTML entities (&amp; -> &) from JSON-LD text fields."""
     return html.unescape(s) if s else None
@@ -124,8 +145,10 @@ def _unescape(s: str | None) -> str | None:
 def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict | None:
     """Fetch one job page, extract JobPosting JSON-LD, map to common schema.
     Returns None if the page has no parseable JobPosting (skip, don't crash)."""
-    html = _get(client, url)
-    tree = etree.HTML(html)
+    # renamed html -> page_bytes: needed as raw bytes for the experience_level regex
+    # below, and the old name silently shadowed the module-level `html` import
+    page_bytes = _get(client, url)
+    tree = etree.HTML(page_bytes)
 
     blocks = tree.xpath(JSONLD_XPATH)
     posting = None
@@ -143,6 +166,7 @@ def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict |
 
     salary_min, salary_max, currency, salary_period = _parse_salary(posting.get("baseSalary"))
     org = _first(posting.get("hiringOrganization")) or {}
+    experience_level = _parse_experience_level(page_bytes)
 
     return {
         "id": f"justjoin:{_native_id(url)}",
@@ -152,6 +176,7 @@ def fetch_job(client: httpx.Client, url: str, tier: str | None = None) -> dict |
         "description": _unescape(posting.get("description")),
         "locations": _parse_locations(posting.get("jobLocation")),
         "location_type": _parse_location_type(posting),
+        "experience_level": experience_level,
         "employment_type": posting.get("employmentType"),
         "skills": None,  # not present in JSON-LD; sourced later if needed
         "salary_min": salary_min,

@@ -10,7 +10,7 @@ from job_scraper.rag.match_cv import rank_jobs
 from job_scraper.rag.answer import _format_salary
 
 TOP_N = 6
-DAYS = 1
+DAYS = 2
 
 
 def _telegram_send(text: str) -> bool:

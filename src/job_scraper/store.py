@@ -21,9 +21,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     salary_min      INTEGER,
     salary_max      INTEGER,
     currency        TEXT,
-    salary_period   TEXT,               -- HOUR/DAY/WEEK/MONTH/YEAR — units for salary_min/max
-    location_type   TEXT,               -- 'remote' | 'onsite' — from schema.org jobLocationType
-    posted_date     TEXT,
+    salary_period    TEXT,              -- HOUR/DAY/WEEK/MONTH/YEAR — units for salary_min/max
+    location_type    TEXT,              -- 'remote' | 'onsite' — from schema.org jobLocationType
+    experience_level TEXT,              -- 'intern'|'junior'|'mid'|'senior'|'expert'|'manager'|'c_level'
+                                         -- ground truth from JustJoin's own site (RSC payload),
+                                         -- not inferred from title text. NULL pre-backfill or if
+                                         -- the listing expired before backfill could reach it.
+    posted_date      TEXT,
     valid_through   TEXT,
     url             TEXT,
     raw_json        TEXT,
@@ -45,11 +49,11 @@ UPSERT = """
 INSERT INTO jobs (
     id, source, title, company, description, locations,
     employment_type, skills, salary_min, salary_max, currency, salary_period, location_type,
-    posted_date, valid_through, url, raw_json, match_tier, last_seen
+    experience_level, posted_date, valid_through, url, raw_json, match_tier, last_seen
 ) VALUES (
     :id, :source, :title, :company, :description, :locations,
     :employment_type, :skills, :salary_min, :salary_max, :currency, :salary_period, :location_type,
-    :posted_date, :valid_through, :url, :raw_json, :match_tier, CURRENT_TIMESTAMP
+    :experience_level, :posted_date, :valid_through, :url, :raw_json, :match_tier, CURRENT_TIMESTAMP
 )
 ON CONFLICT(id) DO UPDATE SET
     title           = excluded.title,
@@ -62,8 +66,9 @@ ON CONFLICT(id) DO UPDATE SET
     salary_max      = excluded.salary_max,
     currency        = excluded.currency,
     salary_period   = excluded.salary_period,
-    location_type   = excluded.location_type,
-    valid_through   = excluded.valid_through,
+    location_type    = excluded.location_type,
+    experience_level = excluded.experience_level,
+    valid_through    = excluded.valid_through,
     url             = excluded.url,
     raw_json        = excluded.raw_json,
     match_tier      = excluded.match_tier,
