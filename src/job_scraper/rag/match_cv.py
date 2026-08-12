@@ -38,9 +38,27 @@ def _within_days(job, days: int | None) -> bool:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     return dt >= cutoff
 
+# JustJoin's own experience_level values -> our three-bucket seniority scheme.
+# manager/c_level treated as senior-equivalent: a management/exec-track posting
+# is at least as inaccessible with zero IT experience as a plain "senior" one —
+# consistent with the junior-accessible reframe, not a separate exception to it.
+EXPERIENCE_LEVEL_MAP = {
+    "senior": "senior", "expert": "senior", "manager": "senior", "c_level": "senior",
+    "mid": "mid",
+    "junior": "junior", "intern": "junior",
+}
+
+
 def _detect_seniority(job) -> str:
-    """Classify seniority from the title. Deterministic keyword match —
-    postings state it almost explicitly, no reasoning required."""
+    """Classify seniority. Prefers ground-truth experience_level (JustJoin's own
+    tag, extracted from the page's RSC payload — not inferred) over title text.
+    Falls back to the title-keyword heuristic only when experience_level is null:
+    the ~20 listings that expired before the backfill could reach them, or any
+    future non-JustJoin source that doesn't carry this field at all."""
+    level = job.get("experience_level")
+    if level in EXPERIENCE_LEVEL_MAP:
+        return EXPERIENCE_LEVEL_MAP[level]
+
     title = (job.get("title") or "").lower()
     if any(m in title for m in ("senior", "sr.", "lead", "principal", "staff", "head of")):
         return "senior"
