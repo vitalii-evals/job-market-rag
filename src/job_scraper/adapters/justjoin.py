@@ -222,14 +222,32 @@ def scrape(limit: int | None = None, delay: float = 0.5) -> list[dict]:
 
 
 # --- Slug-based relevance prefilter -----------------------------------------
-EXCLUDE_KEYWORDS = (
+# HARD_EXCLUDE always wins, regardless of any core/adjacent hit — these terms
+# describe the ROLE ITSELF (teaching, sales, support), so a CORE keyword
+# alongside them means "AI-adjacent sales/support job", not a build role.
+HARD_EXCLUDE_KEYWORDS = (
     "korepetytor", "nauczyciel", "manager-zajec", "zajec-probnych",
-    "sales", "account-manager", "marketing", "helpdesk", "service-desk",
-    "recruiter", "hr-", "specialist-salae",
+    "sales", "account-manager", "helpdesk", "service-desk",
+    "recruiter", "specialist-salae",
 )
+# SOFT_EXCLUDE only wins when there's NO core hit — these terms describe WHO
+# the role serves (marketing/HR as internal client) or collide with company
+# names (e.g. "smart-hr"), not what the role does. Verified 2026-08-12: of
+# 28 slugs with a real CORE hit dropped by an exclude, 18/28 were 'sales'
+# (Salesforce-platform/presales noise, kept hard) vs 11/28 marketing+hr-
+# (real misses, e.g. an internal AI-automation-integration-engineer role
+# whose team happens to be "marketing" — the Comarch-shaped target case).
+SOFT_EXCLUDE_KEYWORDS = ("marketing", "hr-")
 CORE_KEYWORDS = (
     "ai", "ml", "machine-learning", "llm", "genai", "gen-ai",
     "rag", "nlp", "data-scien", "mlops", "automation", "rpa",
+    # Polish stems — SKILL_VOCAB in match_cv.py already scores "automatyzacj"
+    # (added during the Comarch validation session) but the fetch net never
+    # got the matching update, so Polish-titled automation roles never
+    # reached the DB to be scored at all. Verified 2026-08-12: adds 22
+    # previously-invisible slugs, including several Comarch-shaped internal
+    # automation/orchestration roles (upvanta x5, adamed, enea x2, asseco).
+    "automatyzacj", "orkiestracj", "robotyzacj",
 )
 ADJACENT_KEYWORDS = (
     "python", "data-engineer", "data-eng", "backend", "back-end",
@@ -238,9 +256,13 @@ ADJACENT_KEYWORDS = (
 
 def _classify_slug(slug: str) -> str | None:
     """Return 'core' | 'adjacent' if the slug passes the net, else None.
-    Excludes are checked first and always win."""
+    HARD excludes always win. SOFT excludes win only when there's no CORE
+    hit alongside them — ADJACENT hits do NOT override soft excludes (a
+    weaker signal; e.g. a data-engineer role for marketing analytics is
+    genuinely not the target, unlike an ai/automation-titled role that
+    happens to serve a marketing team)."""
     s = slug.lower()
-    if any(kw in s for kw in EXCLUDE_KEYWORDS):
+    if any(kw in s for kw in HARD_EXCLUDE_KEYWORDS):
         return None
     tokens = s.split("-")
 
@@ -254,7 +276,11 @@ def _classify_slug(slug: str) -> str | None:
                     return True
         return False
 
-    if _has(CORE_KEYWORDS):
+    has_core = _has(CORE_KEYWORDS)
+    if any(kw in s for kw in SOFT_EXCLUDE_KEYWORDS) and not has_core:
+        return None
+
+    if has_core:
         return "core"
     if _has(ADJACENT_KEYWORDS):
         return "adjacent"
