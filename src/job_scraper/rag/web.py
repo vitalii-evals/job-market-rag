@@ -5,6 +5,7 @@ listing content, which COMPLIANCE.md restricts to private use in Phases 1-3."""
 from flask import Flask, request, jsonify
 
 from job_scraper.rag.answer import ask, DEFAULT_K
+from job_scraper.rag.dashboard import render_dashboard
 
 app = Flask(__name__)
 
@@ -42,10 +43,14 @@ INDEX_HTML = """<!doctype html>
   #answer code { background:#0b0d11; padding:1px 5px; border-radius:4px; font-size:13px; }
   .status { color:var(--muted); font-size:13px; }
   .err { color:#f97066; }
+  nav { margin-bottom: 24px; font-size: 13px; }
+  nav a { color: var(--muted); text-decoration: none; margin-right: 16px; }
+  nav a.active { color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <nav><a href="/" class="active">RAG chat</a><a href="/stats">Market stats</a></nav>
   <h1>Job Market RAG</h1>
   <div class="sub">Grounded answers over live JustJoin listings · voyage-3.5-lite + claude</div>
   <textarea id="q" placeholder="e.g. What senior LLM roles are hiring in Kraków and what do they pay?"></textarea>
@@ -104,6 +109,11 @@ INDEX_HTML = """<!doctype html>
 @app.route("/")
 def index():
     return INDEX_HTML
+
+
+@app.route("/stats")
+def stats():
+    return render_dashboard()
 
 
 @app.route("/ask", methods=["POST"])

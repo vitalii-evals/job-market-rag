@@ -120,6 +120,16 @@ def corpus_growth_by_week(db_path: str = "jobs.db") -> tuple[list[tuple[str, int
     return weekly, bootstrap_day
 
 
+def total_jobs_in_scope(db_path: str = "jobs.db") -> int:
+    """Count of jobs matching STATS_WHERE — the dashboard's headline number
+    and the self-check denominator, exposed as a real public function
+    rather than reaching into a private helper from another module."""
+    conn = _connect(db_path)
+    count = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {STATS_WHERE}").fetchone()[0]
+    conn.close()
+    return count
+
+
 def top_skills(n: int = 10, db_path: str = "jobs.db") -> list[tuple[str, int]]:
     conn = _connect(db_path)
     rows = conn.execute(f"SELECT skills FROM jobs WHERE {STATS_WHERE}").fetchall()
@@ -232,3 +242,31 @@ if __name__ == "__main__":
     print("\n=== By category ===")
     for cat, count in skill_categories():
         print(f"  {cat}: {count}")
+
+
+def cv_skill_gap(cv_path: str = "cv.docx", db_path: str = "jobs.db", top_n: int = 20):
+    """Diff between top market-demanded skills and what the CV actually
+    contains — same unbiased taxonomy run on both sides, so this is a fair
+    comparison, not match_cv.py's personal CV-fit-weighted view. Returns
+    (have, missing): each a list of (skill, market_count), sorted by
+    market_count descending. 'missing' is the direct answer to 'what should
+    I add to my CV or build into this project next'."""
+    from job_scraper.rag.match_cv import read_cv
+    from job_scraper.stats.taxonomy import extract_skills
+
+    cv_skills = set(extract_skills(read_cv(cv_path)))
+    market = top_skills(top_n, db_path)
+
+    have = [(s, c) for s, c in market if s in cv_skills]
+    missing = [(s, c) for s, c in market if s not in cv_skills]
+    return have, missing
+
+
+if __name__ == "__main__" and "--gap" in __import__("sys").argv:
+    have, missing = cv_skill_gap()
+    print("=== In your CV, in-demand ===")
+    for s, c in have:
+        print(f"  \u2713 {s}: {c}")
+    print("\n=== In demand, NOT in your CV ===")
+    for s, c in missing:
+        print(f"  \u2717 {s}: {c}")
