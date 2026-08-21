@@ -34,18 +34,27 @@ from job_scraper.stats.queries import (
 ROUTER_MODEL = "claude-haiku-4-5-20251001"   # cheap + fast; classification is easy
 ANSWER_MODEL = "claude-sonnet-5"             # matches answer.py
 DESC_TRUNCATE = 500
+MAX_ATTEMPTS = 2   # initial retrieval + at most one rewrite-and-retry
 
 
 class GraphState(TypedDict, total=False):
     """State threaded through every node. total=False because nodes fill
     different keys — the router sets `route`, only one branch sets `docs`
-    or `stats_context`."""
+    or `stats_context`.
+
+    The retry fields are what make this a graph rather than a chain:
+    `attempts` is the termination guard, `search_query` diverges from
+    `question` after a rewrite (the user's question never changes; what we
+    search for does), and `grade` carries the loop decision between nodes."""
     question: str
     k: int
     route: Literal["stats", "listings"]
     docs: list[Document]
     stats_context: str
     answer: str
+    search_query: str
+    grade: Literal["good", "rewrite", "insufficient"]
+    attempts: int
 
 
 ROUTER_PROMPT = ChatPromptTemplate.from_messages([
@@ -78,6 +87,41 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages([
      "- Be concise and factual. This is analysis of real data, not "
      "marketing copy."),
     ("human", "{context}\n\n---\n\nQUESTION: {question}"),
+])
+
+
+GRADER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system",
+     "You judge whether retrieved job listings can answer a question.\n\n"
+     "Reply with exactly one word:\n\n"
+     "'good' — the listings contain enough relevant material to answer, "
+     "even partially. A small number of genuinely on-topic listings counts "
+     "as good.\n\n"
+     "'rewrite' — the listings are off-topic in a way that suggests the "
+     "SEARCH QUERY was poorly phrased: too vague, wrong vocabulary, or "
+     "phrased as a question rather than as the text of a matching job "
+     "posting. A better query would plausibly find better listings.\n\n"
+     "'insufficient' — the query looks reasonable and the corpus simply "
+     "does not contain this kind of role. Rewording would not help.\n\n"
+     "The distinction between 'rewrite' and 'insufficient' matters: one "
+     "means try again, the other means answer honestly that the data "
+     "isn't there."),
+    ("human",
+     "QUESTION: {question}\n\nSEARCH QUERY USED: {search_query}\n\n"
+     "RETRIEVED LISTINGS:\n{summaries}"),
+])
+
+REWRITE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system",
+     "Rewrite a job-search question into a short search query that will "
+     "match the TEXT OF A JOB POSTING via semantic similarity.\n\n"
+     "Vectors match documents that look like the query, so phrase it as a "
+     "job posting would read — role title plus key technologies — not as a "
+     "question. Use standard industry vocabulary.\n\n"
+     "Example: 'are there any jobs where I would build chatbots?' becomes "
+     "'conversational AI engineer chatbot LLM development'.\n\n"
+     "Output only the rewritten query, nothing else."),
+    ("human", "{question}"),
 ])
 
 
@@ -129,9 +173,53 @@ def fetch_stats(state: GraphState) -> GraphState:
 
 def retrieve_listings(state: GraphState) -> GraphState:
     """The RAG branch — the existing hand-built retrieval, via the
-    LangChain retriever interface."""
+    LangChain retriever interface. Searches `search_query`, which starts
+    equal to the question and diverges after a rewrite."""
+    query = state.get("search_query") or state["question"]
     retriever = JobRetriever(k=state.get("k", 12))
-    return {"docs": retriever.invoke(state["question"])}
+    return {
+        "docs": retriever.invoke(query),
+        "search_query": query,
+        "attempts": state.get("attempts", 0) + 1,
+    }
+
+
+def grade_documents(state: GraphState) -> GraphState:
+    """Judge the retrieval. Distinguishes a bad query (retry) from a thin
+    corpus (stop and say so) — collapsing those two into one verdict would
+    make every empty result trigger a pointless rewrite."""
+    docs = state.get("docs", [])
+    if not docs:
+        return {"grade": "insufficient"}
+
+    summaries = "\n".join(
+        f"- {d.metadata.get('title')} @ {d.metadata.get('company')} "
+        f"(similarity {d.metadata.get('score'):.3f}, "
+        f"skills: {d.metadata.get('skills') or 'none detected'})"
+        for d in docs
+    )
+    llm = ChatAnthropic(model=ROUTER_MODEL, max_tokens=10, temperature=0)
+    result = (GRADER_PROMPT | llm).invoke({
+        "question": state["question"],
+        "search_query": state.get("search_query", state["question"]),
+        "summaries": summaries,
+    })
+    verdict = result.content.strip().lower()
+
+    for candidate in ("insufficient", "rewrite", "good"):
+        if candidate in verdict:
+            return {"grade": candidate}
+    # Unrecognized output: proceed rather than loop. Answering from
+    # imperfect docs beats burning a retry on a grader malfunction.
+    return {"grade": "good"}
+
+
+def rewrite_query(state: GraphState) -> GraphState:
+    """Reformulate into posting-shaped text. The user's `question` is never
+    modified — only what we search with."""
+    llm = ChatAnthropic(model=ROUTER_MODEL, max_tokens=100, temperature=0)
+    result = (REWRITE_PROMPT | llm).invoke({"question": state["question"]})
+    return {"search_query": result.content.strip()}
 
 
 def _format_docs(docs: list[Document]) -> str:
@@ -162,17 +250,53 @@ def _format_docs(docs: list[Document]) -> str:
 def generate(state: GraphState) -> GraphState:
     """Single generation node for both branches — the context differs, the
     grounding contract does not."""
+    state = {**state, **exhausted_is_insufficient(state)}
     context = state.get("stats_context") or _format_docs(state.get("docs", []))
+    if state.get("grade") == "insufficient":
+        context += (
+            "\n\n[RETRIEVAL NOTE: these listings were judged a poor match "
+            "for the question. Say plainly that the corpus does not appear "
+            "to contain roles of this kind, then describe what it does "
+            "contain that is closest. Do not stretch these listings to fit.]"
+        )
     llm = ChatAnthropic(model=ANSWER_MODEL, max_tokens=1500)
     result = (ANSWER_PROMPT | llm).invoke(
         {"context": context, "question": state["question"]}
     )
-    return {"answer": result.content}
+    # Return the corrected grade too, not just the answer — ask_graph exposes
+    # full state so callers (API, MCP server) can detect a low-confidence
+    # result. Returning only `answer` left the reported grade stale at
+    # "rewrite" even when generation correctly treated it as insufficient.
+    out = {"answer": result.content}
+    if state.get("grade") == "insufficient":
+        out["grade"] = "insufficient"
+    return out
 
 
 def _pick_branch(state: GraphState) -> Literal["stats", "listings"]:
     """Conditional edge function — reads the route the router node set."""
     return state["route"]
+
+
+def _after_grade(state: GraphState) -> Literal["rewrite", "generate"]:
+    """Loop guard. Rewrites only on a 'rewrite' verdict AND only while under
+    the attempt cap — without the cap check a stubbornly-bad query would
+    cycle indefinitely, since nothing else terminates the loop."""
+    if state.get("grade") == "rewrite" and state.get("attempts", 0) < MAX_ATTEMPTS:
+        return "rewrite"
+    return "generate"
+
+
+def exhausted_is_insufficient(state: GraphState) -> GraphState:
+    """Reclassify a cap-exhausted 'rewrite' as 'insufficient'. If the query
+    was already rewritten once and retrieval is STILL judged bad, the
+    distinction the grader drew no longer holds: we tried the better query
+    and it didn't help, which is the definition of a thin corpus. Without
+    this the insufficient branch is unreachable — the grade stays 'rewrite'
+    and generate never gets the honesty instruction it was built for."""
+    if state.get("grade") == "rewrite" and state.get("attempts", 0) >= MAX_ATTEMPTS:
+        return {"grade": "insufficient"}
+    return {}
 
 
 def build_graph():
@@ -184,6 +308,8 @@ def build_graph():
     builder.add_node("route", route_question)
     builder.add_node("stats", fetch_stats)
     builder.add_node("listings", retrieve_listings)
+    builder.add_node("grade", grade_documents)
+    builder.add_node("rewrite", rewrite_query)
     builder.add_node("generate", generate)
 
     builder.add_edge(START, "route")
@@ -191,7 +317,11 @@ def build_graph():
         "route", _pick_branch, {"stats": "stats", "listings": "listings"}
     )
     builder.add_edge("stats", "generate")
-    builder.add_edge("listings", "generate")
+    builder.add_edge("listings", "grade")
+    builder.add_conditional_edges(
+        "grade", _after_grade, {"rewrite": "rewrite", "generate": "generate"}
+    )
+    builder.add_edge("rewrite", "listings")   # the loop
     builder.add_edge("generate", END)
 
     return builder.compile()
@@ -219,5 +349,11 @@ if __name__ == "__main__":
     )
     result = ask_graph(question)
     print(f"Q: {question}")
-    print(f"[route: {result['route']}]\n")
+    trace = f"route: {result['route']}"
+    if result.get("attempts"):
+        trace += f" | attempts: {result['attempts']} | grade: {result.get('grade')}"
+    print(f"[{trace}]")
+    if result.get("search_query") and result["search_query"] != question:
+        print(f"[rewritten query: {result['search_query']}]")
+    print()
     print(result["answer"])
