@@ -67,6 +67,31 @@ TAXONOMY: dict[str, str] = {
 
     # MLOps
     "mlflow": "MLOps", "kubeflow": "MLOps", "mlops": "MLOps",
+
+    # Microsoft automation stack — added 2026-08-21 after a live /ask query
+    # ("what skills recur in AI automation roles?") surfaced Copilot Studio
+    # and Power Platform as a dominant cluster in exactly the target segment,
+    # while top_skills showed neither: the vocabulary wasn't looking, so the
+    # signal was invisible rather than absent. Same class of gap as the
+    # missing Polish automation stems in _classify_slug.
+    "copilot studio": "Microsoft Automation", "power automate": "Microsoft Automation",
+    "power apps": "Microsoft Automation", "power platform": "Microsoft Automation",
+    "power bi": "Microsoft Automation", "dataverse": "Microsoft Automation",
+    "sharepoint": "Microsoft Automation", "microsoft 365": "Microsoft Automation",
+    "dynamics 365": "Microsoft Automation",
+
+    # Conversational-AI platforms — same discovery, adjacent cluster
+    "dialogflow": "Agent/Automation", "cognigy": "Agent/Automation",
+    "kore.ai": "Agent/Automation", "parloa": "Agent/Automation",
+    "voiceflow": "Agent/Automation",
+
+    # Agent protocol/tooling — on the build list and seen in real listings
+    # (act digital, Be in IT both named MCP explicitly), previously unmeasurable
+    "mcp": "Agent/Automation", "model context protocol": "Agent/Automation",
+
+    # Cloud AI platform services — Vertex AI appeared alongside Gemini in
+    # the same cluster; bedrock/azure openai are its direct equivalents
+    "vertex ai": "Cloud", "bedrock": "Cloud", "azure openai": "Cloud",
 }
 
 

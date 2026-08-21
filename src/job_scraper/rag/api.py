@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from job_scraper.rag.answer import ask, DEFAULT_K
+from job_scraper.rag.graph import ask_graph
 from job_scraper.rag.dashboard import render_dashboard
 from job_scraper.rag.web import INDEX_HTML
 from job_scraper.stats.queries import (
@@ -43,6 +44,10 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     k: int
+    route: str | None = None
+    grade: str | None = None
+    attempts: int | None = None
+    search_query: str | None = None
 
 
 class StatsResponse(BaseModel):
@@ -65,8 +70,38 @@ def stats_page() -> str:
 
 @app.post("/ask", response_model=AskResponse)
 def ask_endpoint(req: AskRequest) -> AskResponse:
-    """Grounded answer over retrieved listings. Sync by design — see
-    module docstring on the threadpool/event-loop tradeoff."""
+    """Grounded answer via the LangGraph agent: routes aggregate questions
+    to computed stats and listing questions to retrieval, grading and
+    retrying weak retrieval once.
+
+    Returns the routing trace alongside the answer — `grade == "insufficient"`
+    means the corpus genuinely lacks this kind of role, which a caller can
+    surface as low confidence rather than presenting the answer flatly.
+
+    Sync by design — see module docstring on the threadpool tradeoff."""
+    try:
+        state = ask_graph(req.question, k=req.k)
+        return AskResponse(
+            answer=state["answer"],
+            k=req.k,
+            route=state.get("route"),
+            grade=state.get("grade"),
+            attempts=state.get("attempts"),
+            search_query=(
+                state.get("search_query")
+                if state.get("search_query") != req.question else None
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+@app.post("/ask/linear", response_model=AskResponse)
+def ask_linear_endpoint(req: AskRequest) -> AskResponse:
+    """The original hand-built path: embed -> retrieve top-k -> generate,
+    raw Anthropic SDK, no routing or grading. Kept live rather than removed
+    so the two implementations can be compared directly on the same
+    question — the graph's value is only legible next to what it replaced."""
     try:
         return AskResponse(answer=ask(req.question, k=req.k), k=req.k)
     except Exception as e:
