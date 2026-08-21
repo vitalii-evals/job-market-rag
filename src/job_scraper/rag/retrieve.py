@@ -9,7 +9,7 @@ from job_scraper.rag.embed import blob_to_vec, MODEL, DIM
 _META_COLS = [
     "id", "title", "company", "locations", "url", "match_tier",
     "salary_min", "salary_max", "currency", "salary_period", "location_type",
-    "experience_level", "posted_date", "employment_type", "description",
+    "experience_level", "skills", "posted_date", "employment_type", "description",
 ]
 
 def load_vector_store(db_path: str = "jobs.db"):
